@@ -1489,6 +1489,16 @@ async def extract_vidhide(url: str, referer: str = "") -> list:
         return []
 
 
+def _base_encode(n: int, base: int) -> str:
+    """Convert integer n to a base-N string using 0-9a-z alphabet."""
+    chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if n == 0:
+        return ""
+    remainder = n % base
+    char = chars[remainder] if remainder < len(chars) else str(remainder)
+    return _base_encode(n // base, base) + char
+
+
 def unpack_js(packed: str) -> str:
     try:
         p_match = re.search(r"'([^']+)'", packed)
@@ -1504,7 +1514,7 @@ def unpack_js(packed: str) -> str:
         while c > 0:
             c -= 1
             if c < len(k) and k[c]:
-                p = re.sub(r"\b" + (lambda n: (lambda ss, b: ("" if n == 0 else ss[(n % b):] + (lambda n2: ss[n2] if n2 < len(ss) else str(n2))(n // b)))(c, a), k[c] if c < len(k) else str(c), p)
+                p = re.sub(r"\b" + _base_encode(c, a) + r"\b", k[c], p)
         return p
     except Exception:
         return packed
