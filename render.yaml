@@ -9,5 +9,13 @@ services:
         sync: false
       - key: OPENSUBS_API_KEY
         sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_ZONE_ID
+        sync: false
+      - key: CLOUDFLARE_EMAIL
+        sync: false
+      - key: API_KEY
+        sync: false
     healthCheckPath: /health
     autoDeploy: true
