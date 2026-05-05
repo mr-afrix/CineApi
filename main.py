@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cineapi")
 
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "1739012afb6a538588d51ce8e9bded3a")
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
 TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
