@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: cineapi
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: TMDB_API_KEY
+        sync: false
+      - key: OPENSUBS_API_KEY
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
