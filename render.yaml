@@ -2,20 +2,22 @@ services:
   - type: web
     name: cineapi
     runtime: docker
-    plan: free
     dockerfilePath: ./Dockerfile
+    plan: free
     envVars:
-      - key: TMDB_API_KEY
-        sync: false
-      - key: OPENSUBS_API_KEY
-        sync: false
+      - key: PORT
+        value: 8000
+      - key: MASTER_API_KEY
+        generateValue: true
       - key: CLOUDFLARE_API_TOKEN
         sync: false
       - key: CLOUDFLARE_ZONE_ID
         sync: false
-      - key: CLOUDFLARE_EMAIL
-        sync: false
-      - key: API_KEY
-        sync: false
+      - key: DOWNLOAD_DIR
+        value: /tmp/cineapi_downloads
+      - key: DOWNLOAD_TTL_HOURS
+        value: 2
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: 3
     healthCheckPath: /health
     autoDeploy: true
