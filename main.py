@@ -2048,26 +2048,92 @@ async def cleanup_downloads():
 async def get_cloudflare_analytics(period: str = "24h") -> dict:
     if not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ZONE_ID:
         return {"error": "Cloudflare credentials not configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID env vars."}
-    periods = {"1h": "-60", "24h": "-1440", "7d": "-10080", "30d": "-43200"}
-    minutes = periods.get(period, "-1440")
+    import datetime
+    period_hours = {"1h": 1, "24h": 24, "7d": 168, "30d": 720}
+    hours = period_hours.get(period, 24)
+    now = datetime.datetime.utcnow()
+    since = (now - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = """
+    query($zoneTag: String!, $since: String!, $until: String!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          httpRequests1hGroups(
+            limit: 1000
+            filter: { datetime_geq: $since, datetime_leq: $until }
+          ) {
+            sum {
+              requests
+              cachedRequests
+              bytes
+              cachedBytes
+              threats
+              pageViews
+            }
+            uniq {
+              uniques
+            }
+          }
+          firewallEventsAdaptiveGroups(
+            limit: 10
+            filter: { datetime_geq: $since, datetime_leq: $until }
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions {
+              action
+              source
+              clientCountryName
+            }
+          }
+        }
+      }
+    }
+    """
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}", "Content-Type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"https://api.cloudflare.com/client/v4/zones/{CLOUDFLARE_ZONE_ID}/analytics/dashboard?since={minutes}&continuous=true", headers=headers)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.cloudflare.com/client/v4/graphql",
+                json={"query": query, "variables": {"zoneTag": CLOUDFLARE_ZONE_ID, "since": since, "until": until}},
+                headers=headers
+            )
             data = resp.json()
-        if not data.get("success"):
-            return {"error": "Cloudflare API error", "details": data.get("errors")}
-        totals = data.get("result", {}).get("totals", {})
-        requests_data = totals.get("requests", {})
-        bandwidth_data = totals.get("bandwidth", {})
-        threats_data = totals.get("threats", {})
-        pageviews_data = totals.get("pageviews", {})
+        if data.get("errors"):
+            return {"error": "Cloudflare GraphQL error", "details": data["errors"]}
+        zones = data.get("data", {}).get("viewer", {}).get("zones", [])
+        if not zones:
+            return {"error": "No zone data returned. Check your Zone ID."}
+        zone = zones[0]
+        groups = zone.get("httpRequests1hGroups", [])
+        total_requests = sum(g["sum"]["requests"] for g in groups)
+        cached_requests = sum(g["sum"]["cachedRequests"] for g in groups)
+        total_bytes = sum(g["sum"]["bytes"] for g in groups)
+        cached_bytes = sum(g["sum"]["cachedBytes"] for g in groups)
+        total_threats = sum(g["sum"]["threats"] for g in groups)
+        total_pageviews = sum(g["sum"]["pageViews"] for g in groups)
+        total_uniques = sum(g["uniq"]["uniques"] for g in groups)
+        fw_groups = zone.get("firewallEventsAdaptiveGroups", [])
+        firewall_summary = [{"action": g["dimensions"]["action"], "source": g["dimensions"]["source"], "country": g["dimensions"]["clientCountryName"], "count": g["count"]} for g in fw_groups]
         return {
             "period": period,
-            "requests": {"total": requests_data.get("all", 0), "cached": requests_data.get("cached", 0), "uncached": requests_data.get("uncached", 0), "cache_hit_rate": round(requests_data.get("cached", 0) / max(requests_data.get("all", 1), 1), 4)},
-            "bandwidth": {"total_gb": round(bandwidth_data.get("all", 0) / (1024 ** 3), 3), "cached_gb": round(bandwidth_data.get("cached", 0) / (1024 ** 3), 3), "uncached_gb": round(bandwidth_data.get("uncached", 0) / (1024 ** 3), 3)},
-            "threats": {"total": threats_data.get("all", 0), "type_breakdown": threats_data.get("type", {})},
-            "pageviews": {"total": pageviews_data.get("all", 0), "search_engine": pageviews_data.get("search_engine", {})},
+            "since": since,
+            "until": until,
+            "requests": {
+                "total": total_requests,
+                "cached": cached_requests,
+                "uncached": total_requests - cached_requests,
+                "cache_hit_rate": round(cached_requests / max(total_requests, 1), 4),
+            },
+            "bandwidth": {
+                "total_gb": round(total_bytes / (1024 ** 3), 4),
+                "cached_gb": round(cached_bytes / (1024 ** 3), 4),
+                "uncached_gb": round((total_bytes - cached_bytes) / (1024 ** 3), 4),
+            },
+            "threats": {"total": total_threats},
+            "pageviews": {"total": total_pageviews},
+            "unique_visitors": total_uniques,
+            "firewall_top_events": firewall_summary,
         }
     except Exception as e:
         logger.warning(f"Cloudflare analytics failed: {e}")
@@ -2077,17 +2143,52 @@ async def get_cloudflare_analytics(period: str = "24h") -> dict:
 async def get_cloudflare_firewall(limit: int = 25) -> dict:
     if not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ZONE_ID:
         return {"error": "Cloudflare credentials not configured"}
+    import datetime
+    since = (datetime.datetime.utcnow() - datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = """
+    query($zoneTag: String!, $since: String!, $until: String!, $limit: Int!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          firewallEventsAdaptive(
+            limit: $limit
+            filter: { datetime_geq: $since, datetime_leq: $until }
+            orderBy: [datetime_DESC]
+          ) {
+            action
+            clientIP
+            clientCountryName
+            clientRequestPath
+            clientRequestHTTPMethodName
+            datetime
+            source
+            userAgent
+            ruleId
+          }
+        }
+      }
+    }
+    """
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}", "Content-Type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"https://api.cloudflare.com/client/v4/zones/{CLOUDFLARE_ZONE_ID}/security/events?per_page={limit}", headers=headers)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.cloudflare.com/client/v4/graphql",
+                json={"query": query, "variables": {"zoneTag": CLOUDFLARE_ZONE_ID, "since": since, "until": until, "limit": limit}},
+                headers=headers
+            )
             data = resp.json()
-        if not data.get("success"):
-            return {"error": "Cloudflare API error", "details": data.get("errors")}
-        events = []
-        for ev in data.get("result", []):
-            events.append({"timestamp": ev.get("occurred_at"), "action": ev.get("action"), "rule_id": ev.get("rule_id"), "source": ev.get("source"), "ip": ev.get("client_ip"), "country": ev.get("client_country_name"), "method": ev.get("request", {}).get("method"), "path": ev.get("request", {}).get("uri")})
-        return {"events": events, "total": len(events)}
+        if data.get("errors"):
+            return {"error": "Cloudflare GraphQL error", "details": data["errors"]}
+        zones = data.get("data", {}).get("viewer", {}).get("zones", [])
+        if not zones:
+            return {"error": "No zone data returned"}
+        events = zones[0].get("firewallEventsAdaptive", [])
+        return {
+            "events": [{"timestamp": ev.get("datetime"), "action": ev.get("action"), "ip": ev.get("clientIP"), "country": ev.get("clientCountryName"), "path": ev.get("clientRequestPath"), "method": ev.get("clientRequestHTTPMethodName"), "source": ev.get("source"), "user_agent": ev.get("userAgent"), "rule_id": ev.get("ruleId")} for ev in events],
+            "total": len(events),
+            "period": "last 24h",
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -3016,4 +3117,3 @@ async def embed_anime(request: Request, anilist_id: int, episode: int, autoplay:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)
-
