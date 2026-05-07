@@ -1,14 +1,3 @@
-/**
- * Cine API — Self-scraping Movie, TV & Anime Stream API
- * Domain: api.cine.dpdns.org
- * All endpoints versioned under /cn/v1/*
- *
- * Scrapes: FlixHQ, VidSrc.to, VidSrc.me, Rive, 2embed, Zoro/Aniwatch, Gogoanime
- * Metadata: TMDB + AniList GraphQL
- * Subtitles: OpenSubtitles public search
- * Hybrid: got-scraping (TLS spoof) → Playwright fallback for CF-protected pages
- */
-
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import compress from "@fastify/compress";
@@ -25,7 +14,7 @@ import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/* ─────────────────────────── ENV / CONSTANTS ─────────────────────────── */
+                                                                             
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const NODE_ENV = process.env.NODE_ENV || "development";
@@ -41,12 +30,12 @@ const IMG_ORIG = "https://image.tmdb.org/t/p/original";
 const IMG_W780 = "https://image.tmdb.org/t/p/w780";
 const ANILIST_GQL = "https://graphql.anilist.co";
 
-const TTL_STREAM = 30 * 60 * 1000;       // 30 min — streams change often
-const TTL_META = 24 * 60 * 60 * 1000;    // 24 hrs — metadata is stable
-const TTL_SEARCH = 60 * 60 * 1000;       // 1 hr
-const TTL_SUBS = 2 * 60 * 60 * 1000;     // 2 hrs
+const TTL_STREAM = 30 * 60 * 1000;       
+const TTL_META = 24 * 60 * 60 * 1000;    
+const TTL_SEARCH = 60 * 60 * 1000;       
+const TTL_SUBS = 2 * 60 * 60 * 1000;     
 
-/* ─────────────────────────── USER AGENTS ─────────────────────────── */
+                                                                         
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -61,7 +50,7 @@ function randomUA() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-/* ─────────────────────────── CACHE LAYER ─────────────────────────── */
+                                                                         
 
 await mkdir(path.dirname(CACHE_DB_PATH), { recursive: true }).catch(() => {});
 
@@ -86,9 +75,8 @@ async function cacheClear() {
   try { await cache.clear(); } catch {}
 }
 
-/* ─────────────────────────── API KEY REGISTRY ─────────────────────────── */
+                                                                              
 
-// Parse API_KEYS env: "key:tier:rpm:name,key2:tier2:rpm2:name2"
 function parseApiKeys() {
   const raw = process.env.API_KEYS || "cine-2026:enterprise:600:Master,cine-pro-2026:pro:200:Pro,cine-free:free:30:Free";
   const keys = {};
@@ -104,7 +92,6 @@ function parseApiKeys() {
 
 const API_KEYS = parseApiKeys();
 
-// In-memory sliding window — backed by SQLite so it survives restarts
 async function checkKey(key) {
   if (!key || !API_KEYS[key]) {
     return { ok: false, status: 401, err: "Invalid or missing API key. Append ?api=YOUR_KEY" };
@@ -118,11 +105,11 @@ async function checkKey(key) {
     return { ok: false, status: 429, err: `Rate limit exceeded (${meta.rpm} rpm for ${meta.tier} tier)`, retry: 60 };
   }
   window.push(now);
-  await cacheSet(windowKey, window, 65_000); // slightly over 1 min TTL
+  await cacheSet(windowKey, window, 65_000); 
   return { ok: true, meta };
 }
 
-/* ─────────────────────────── REQUEST STATS ─────────────────────────── */
+                                                                           
 
 const START_TIME = Date.now();
 
@@ -133,7 +120,7 @@ const stats = {
   startedAt: START_TIME,
 };
 
-/* ─────────────────────────── FASTIFY SETUP ─────────────────────────── */
+                                                                           
 
 const app = Fastify({
   logger: NODE_ENV !== "production",
@@ -149,9 +136,8 @@ await app.register(cors, {
 
 await app.register(compress, { global: true });
 
-// Auth + stats middleware
 app.addHook("onRequest", async (req, reply) => {
-  // Skip auth for root, health, favicon, and explorer
+  
   const pub = ["/", "/cn", "/cn/v1", "/favicon.ico", "/cn/v1/health"];
   if (req.method === "OPTIONS" || pub.includes(req.url?.split("?")[0])) return;
 
@@ -172,12 +158,12 @@ app.addHook("onResponse", async (req) => {
   stats.byEndpoint[ep] = (stats.byEndpoint[ep] || 0) + 1;
 });
 
-/* ─────────────────────────── RESPONSE HELPERS ─────────────────────────── */
+                                                                              
 
 const ok = (data) => ({ success: true, data, error: null });
 const fail = (err, status = 400) => ({ success: false, data: null, error: String(err) });
 
-/* ─────────────────────────── HTTP HELPERS ─────────────────────────── */
+                                                                          
 
 const BASE_HEADERS = {
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -246,7 +232,6 @@ async function httpPost(url, { body = {}, headers = {}, timeout = SCRAPER_TIMEOU
   try { return JSON.parse(resp.body); } catch { return resp.body; }
 }
 
-// Check if a response is a Cloudflare challenge page
 function isCfChallenge(html) {
   if (typeof html !== "string") return false;
   return (
@@ -259,7 +244,7 @@ function isCfChallenge(html) {
   );
 }
 
-/* ─────────────────────────── PLAYWRIGHT POOL ─────────────────────────── */
+                                                                             
 
 class BrowserPool {
   constructor(size) {
@@ -299,7 +284,7 @@ class BrowserPool {
       slot.busy = true;
       return slot;
     }
-    // Queue the request
+    
     return new Promise((resolve) => {
       this.queue.push(resolve);
     });
@@ -326,14 +311,14 @@ class BrowserPool {
       ignoreHTTPSErrors: true,
     });
     const page = await context.newPage();
-    // Stealth: remove navigator.webdriver
+    
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
       window.chrome = { runtime: {} };
     });
     try {
       await page.goto(url, { waitUntil: waitFor, timeout });
-      // Wait for CF challenge to resolve if present
+      
       const content = await page.content();
       if (isCfChallenge(content)) {
         await page.waitForTimeout(5000);
@@ -357,7 +342,6 @@ class BrowserPool {
 
 const pool = new BrowserPool(PLAYWRIGHT_POOL_SIZE);
 
-// Hybrid fetch — got-scraping first, Playwright fallback for CF pages
 async function hybridGet(url, opts = {}) {
   try {
     const html = await httpGet(url, opts);
@@ -371,7 +355,7 @@ async function hybridGet(url, opts = {}) {
   return html;
 }
 
-/* ─────────────────────────── TMDB LAYER ─────────────────────────── */
+                                                                        
 
 async function tmdb(endpoint, params = {}) {
   const cacheKey = `tmdb:${endpoint}:${JSON.stringify(params)}`;
@@ -561,7 +545,6 @@ function mapTVFull(r) {
   };
 }
 
-// Get IMDB ID from TMDB ID
 async function getImdbId(tmdbId, type = "movie") {
   const cacheKey = `imdbid:${type}:${tmdbId}`;
   const cached = await cacheGet(cacheKey);
@@ -574,7 +557,7 @@ async function getImdbId(tmdbId, type = "movie") {
   } catch { return null; }
 }
 
-/* ─────────────────────────── ANILIST LAYER ─────────────────────────── */
+                                                                           
 
 function mapAnime(m) {
   if (!m) return null;
@@ -647,7 +630,7 @@ const ANIME_FIELDS = `
   endDate { year month day }
 `;
 
-/* ─────────────────────────── CRYPTO HELPERS ─────────────────────────── */
+                                                                            
 
 function xorDecrypt(str, key) {
   let result = "";
@@ -686,7 +669,7 @@ function base64Decode(str) {
   return Buffer.from(str, "base64").toString("utf8");
 }
 
-/* ─────────────────────────── STREAM HELPERS ─────────────────────────── */
+                                                                            
 
 const QUALITY_RANK = { "2160p": 5, "1080p": 4, "720p": 3, "480p": 2, "360p": 1 };
 
@@ -725,11 +708,10 @@ async function validateStreamUrl(url) {
   } catch { return false; }
 }
 
-/* ─────────────────────────── SCRAPER: FlixHQ ─────────────────────────── */
+                                                                             
 
 const FLIXHQ_BASE = "https://flixhq.to";
 
-// Known RabbitStream/UpCloud decryption — key rotates, these are current stable
 const RABBIT_KEY = "8b5fa756190740d5901c4a52bccc5a39";
 
 async function flixhqSearch(title, type = "movie") {
@@ -824,15 +806,15 @@ async function flixhqExtractSource(serverId) {
     const embedUrl = data?.link || data?.url;
     if (!embedUrl) return [];
 
-    // Handle RabbitStream
+    
     if (embedUrl.includes("rabbitstream") || embedUrl.includes("rapid-cloud")) {
       return await extractRabbitStream(embedUrl, FLIXHQ_BASE);
     }
-    // Handle UpCloud
+    
     if (embedUrl.includes("upcloud") || embedUrl.includes("dood") || embedUrl.includes("vidcloud")) {
       return await extractUpCloud(embedUrl, FLIXHQ_BASE);
     }
-    // Generic iframe source
+    
     return await extractGenericEmbed(embedUrl, FLIXHQ_BASE);
   } catch (e) {
     console.error(`[flixhq] extractSource error: ${e.message}`);
@@ -847,7 +829,7 @@ async function extractRabbitStream(embedUrl, referer) {
     const host = parsed.origin;
 
     const html = await hybridGet(embedUrl, { referer });
-    // Extract getSources endpoint and keys
+    
     const keyMatch = html.match(/getSources\.php[^"']*/);
     const e1Match = html.match(/var\s+e1\s*=\s*"([^"]+)"/);
     const e2Match = html.match(/var\s+e2\s*=\s*"([^"]+)"/);
@@ -862,14 +844,14 @@ async function extractRabbitStream(embedUrl, referer) {
     if (!sourcesData) return [];
 
     let sources = sourcesData.sources;
-    // If sources is a string, it's encrypted — decrypt it
+    
     if (typeof sources === "string") {
-      // Try RC4 with known key
+      
       try {
         const decrypted = rc4Decrypt(RABBIT_KEY, sources);
         sources = JSON.parse(decrypted);
       } catch {
-        // Try AES with extracted keys
+        
         if (e1Match && e2Match) {
           try {
             const dec = aesDecrypt(sources, e1Match[1].padEnd(32, "0").slice(0, 32), e2Match[1].padEnd(16, "0").slice(0, 16));
@@ -888,7 +870,7 @@ async function extractRabbitStream(embedUrl, referer) {
       }
     }
 
-    // Also grab tracks (subtitles embedded)
+    
     const tracks = sourcesData.tracks || [];
     if (streams.length > 0) streams[0].subtitles_embedded = tracks.filter((t) => t.kind === "captions").length > 0;
 
@@ -904,7 +886,7 @@ async function extractUpCloud(embedUrl, referer) {
     const html = await hybridGet(embedUrl, { referer });
     const $ = cheerio.load(html);
 
-    // Look for sources in various formats
+    
     const scriptContent = $("script").map((_, el) => $(el).html()).get().join("\n");
     const m3u8Match = scriptContent.match(/file:\s*["']([^"']+\.m3u8[^"']*)/i)
       || scriptContent.match(/src:\s*["']([^"']+\.m3u8[^"']*)/i);
@@ -939,7 +921,7 @@ async function extractGenericEmbed(embedUrl, referer) {
 
 async function scrapeFlixHQMovie(imdbId) {
   try {
-    const title = imdbId; // We'll search by IMDB ID pattern (FlixHQ accepts tt IDs in search too)
+    const title = imdbId; 
     const results = await flixhqSearch(imdbId, "movie");
     if (!results.length) return [];
     const content = results[0];
@@ -978,7 +960,7 @@ async function scrapeFlixHQTV(imdbId, season, episode) {
   }
 }
 
-/* ─────────────────────────── SCRAPER: VidSrc.to ─────────────────────────── */
+                                                                                
 
 const VIDSRCTO_BASE = "https://vidsrc.to";
 
@@ -991,12 +973,12 @@ async function scrapeVidsrcTo(imdbId, season = null, episode = null) {
     const html = await hybridGet(url, { referer: VIDSRCTO_BASE });
     const $ = cheerio.load(html);
 
-    // Extract datastore hash for API call
+    
     const providerEls = [];
     $("[data-hash]").each((_, el) => { providerEls.push($(el).attr("data-hash")); });
 
     if (!providerEls.length) {
-      // Try script-based extraction
+      
       const scriptContent = $("script").map((_, el) => $(el).html()).get().join("\n");
       const hashMatch = scriptContent.match(/data-hash="([^"]+)"/);
       if (hashMatch) providerEls.push(hashMatch[1]);
@@ -1013,7 +995,7 @@ async function scrapeVidsrcTo(imdbId, season = null, episode = null) {
             json: true, referer: url, headers: { "X-Requested-With": "XMLHttpRequest" },
           });
           if (detail?.url) {
-            // XOR decode the URL if needed
+            
             let streamUrl = detail.url;
             try {
               if (!streamUrl.startsWith("http")) {
@@ -1035,7 +1017,7 @@ async function scrapeVidsrcTo(imdbId, season = null, episode = null) {
   }
 }
 
-/* ─────────────────────────── SCRAPER: VidSrc.me ─────────────────────────── */
+                                                                                
 
 const VIDSRCME_BASE = "https://vidsrc.me";
 
@@ -1048,7 +1030,7 @@ async function scrapeVidsrcMe(imdbId, season = null, episode = null) {
     const html = await hybridGet(url, { referer: VIDSRCME_BASE });
     const $ = cheerio.load(html);
 
-    // Find the srcrcs iframe
+    
     const iframeSrc = $("iframe#player_iframe, iframe.vidplay").attr("src") || "";
     if (!iframeSrc) return [];
 
@@ -1056,12 +1038,12 @@ async function scrapeVidsrcMe(imdbId, season = null, episode = null) {
     const iframeHtml = await hybridGet(iframeUrl, { referer: url });
     const $2 = cheerio.load(iframeHtml);
 
-    // Extract encoded source from data attribute
+    
     const dataHash = $2("[data-hash]").attr("data-hash")
       || iframeHtml.match(/data-hash="([^"]+)"/)?.[1];
     if (!dataHash) return [];
 
-    // Fetch sources
+    
     const sourcesUrl = `${new URL(iframeUrl).origin}/ajax/embed/episode/${dataHash}/sources`;
     const sourcesData = await httpGet(sourcesUrl, {
       json: true, referer: iframeUrl, headers: { "X-Requested-With": "XMLHttpRequest" },
@@ -1077,7 +1059,7 @@ async function scrapeVidsrcMe(imdbId, season = null, episode = null) {
           let streamUrl = detail.url;
           try {
             if (!streamUrl.startsWith("http")) {
-              // XOR with known key
+              
               const decoded = base64Decode(streamUrl);
               streamUrl = xorDecrypt(decoded, "WXrUARXb1aDLaZjI");
             }
@@ -1095,7 +1077,7 @@ async function scrapeVidsrcMe(imdbId, season = null, episode = null) {
   }
 }
 
-/* ─────────────────────────── SCRAPER: Rive ─────────────────────────── */
+                                                                           
 
 const RIVE_BASE = "https://rivestream.live";
 
@@ -1108,14 +1090,14 @@ async function scrapeRive(tmdbId, type = "movie", season = null, episode = null)
     const html = await hybridGet(url, { referer: RIVE_BASE });
     const $ = cheerio.load(html);
 
-    // Extract __NEXT_DATA__ JSON
+    
     const nextDataRaw = $("#__NEXT_DATA__").html() || $("script#__NEXT_DATA__").html();
     if (!nextDataRaw) return [];
 
     let nextData;
     try { nextData = JSON.parse(nextDataRaw); } catch { return []; }
 
-    // Navigate to sources in Next.js page props
+    
     const pageProps = nextData?.props?.pageProps || {};
     const sources = pageProps?.sources || pageProps?.streams || pageProps?.data?.sources || [];
 
@@ -1123,7 +1105,7 @@ async function scrapeRive(tmdbId, type = "movie", season = null, episode = null)
       return sources.map((s) => makeStream(s.url || s.file, s.quality || s.label || "auto", (s.url || s.file || "").includes(".m3u8") ? "hls" : "mp4", "rive", s.server || null, { Referer: RIVE_BASE, Origin: RIVE_BASE }));
     }
 
-    // Fallback: try the API endpoint directly
+    
     const apiUrl = type === "movie"
       ? `${RIVE_BASE}/api/backendfetch?requestID=movie-${tmdbId}`
       : `${RIVE_BASE}/api/backendfetch?requestID=tv-${tmdbId}-${season}-${episode}`;
@@ -1140,7 +1122,7 @@ async function scrapeRive(tmdbId, type = "movie", season = null, episode = null)
   }
 }
 
-/* ─────────────────────────── SCRAPER: 2embed ─────────────────────────── */
+                                                                             
 
 const TWOEMBED_BASE = "https://www.2embed.cc";
 
@@ -1153,7 +1135,7 @@ async function scrape2Embed(imdbId, season = null, episode = null) {
     const html = await hybridGet(url, { referer: TWOEMBED_BASE });
     const $ = cheerio.load(html);
 
-    // Extract all iframes and find the video one
+    
     const iframes = [];
     $("iframe").each((_, el) => {
       const src = $(el).attr("src") || $(el).attr("data-src") || "";
@@ -1163,7 +1145,7 @@ async function scrape2Embed(imdbId, season = null, episode = null) {
     });
 
     if (!iframes.length) {
-      // Check scripts for source URLs
+      
       const scripts = $("script").map((_, el) => $(el).html()).get().join("\n");
       const m3u8 = scripts.match(/["']([^"']+\.m3u8[^"']*)/i);
       if (m3u8) return [makeStream(m3u8[1], "auto", "hls", "2embed", null, { Referer: TWOEMBED_BASE })];
@@ -1191,11 +1173,10 @@ async function scrape2Embed(imdbId, season = null, episode = null) {
   }
 }
 
-/* ─────────────────────────── SCRAPER: Zoro/Aniwatch (Anime) ─────────────────────────── */
+                                                                                            
 
 const ZORO_BASE = "https://aniwatch.to";
 
-// Known Zoro/Aniwatch AES key (stable, publicly documented)
 const ZORO_KEY = "8z+sQGfJ0e7UYU0nJmJeKXXZdHHf0M8KdHHf0M8KBEE=";
 
 async function zoroSearch(title) {
@@ -1274,12 +1255,12 @@ async function zoroExtractSource(serverId) {
     if (!data?.link) return [];
     const embedUrl = data.link;
 
-    // Handle RabbitStream from Zoro
+    
     if (embedUrl.includes("megacloud") || embedUrl.includes("rapid-cloud") || embedUrl.includes("rabbitstream")) {
       return await extractRabbitStream(embedUrl, ZORO_BASE);
     }
 
-    // Generic extraction
+    
     return await extractGenericEmbed(embedUrl, ZORO_BASE);
   } catch (e) {
     console.error(`[zoro] extractSource error: ${e.message}`);
@@ -1289,7 +1270,7 @@ async function zoroExtractSource(serverId) {
 
 async function scrapeZoroAnime(anilistId, episodeNum, subType = "sub") {
   try {
-    // Get anime title from AniList first
+    
     const aniData = await anilistQuery(`query($id:Int){Media(id:$id,type:ANIME){id title{romaji english}}}`, { id: anilistId });
     const title = aniData?.data?.Media?.title?.english || aniData?.data?.Media?.title?.romaji;
     if (!title) return [];
@@ -1297,14 +1278,14 @@ async function scrapeZoroAnime(anilistId, episodeNum, subType = "sub") {
     const searchResults = await zoroSearch(title);
     if (!searchResults.length) return [];
 
-    // Try top 2 results in case first is wrong
+    
     for (const result of searchResults.slice(0, 2)) {
       const episodes = await zoroGetEpisodes(result.id);
       const targetEp = episodes.find((e) => e.number === episodeNum) || episodes[episodeNum - 1];
       if (!targetEp) continue;
 
       const servers = await zoroGetServers(targetEp.id);
-      // Prefer the requested sub type
+      
       const preferred = servers.filter((s) => s.type === subType);
       const fallback = servers.filter((s) => s.type !== subType);
       const orderedServers = [...preferred, ...fallback];
@@ -1323,14 +1304,14 @@ async function scrapeZoroAnime(anilistId, episodeNum, subType = "sub") {
   }
 }
 
-/* ─────────────────────────── SCRAPER: Gogoanime ─────────────────────────── */
+                                                                                
 
 const GOGO_BASE = "https://gogoanime3.co";
 const GOGO_AJAX = "https://ajax.gogocdn.net";
-// AES-256-CBC keys — ASCII strings used as utf8 Buffers (standard gogoanime scraper keys)
-const GOGO_IV   = Buffer.from("3232363936313634", "utf8");   // 16 bytes
-const GOGO_KEY  = Buffer.from("37383866643737623638663538663163", "utf8"); // 32 bytes
-const GOGO_SECOND_KEY = Buffer.from("33363435363133343336333036343337", "utf8"); // 32 bytes
+
+const GOGO_IV   = Buffer.from("3232363936313634", "utf8");   
+const GOGO_KEY  = Buffer.from("37383866643737623638663538663163", "utf8"); 
+const GOGO_SECOND_KEY = Buffer.from("33363435363133343336333036343337", "utf8"); 
 
 function gogoDecrypt(data, key) {
   const decipher = crypto.createDecipheriv("aes-256-cbc", key, GOGO_IV);
@@ -1405,10 +1386,10 @@ async function gogoExtractStream(episodeLink) {
     const iframeHtml = await hybridGet(iframeUrl, { referer: episodeLink });
     const $2 = cheerio.load(iframeHtml);
 
-    // Extract crypto params
+    
     const cryptoScript = $2("script[data-name='episode']").attr("data-value");
     if (!cryptoScript) {
-      // Fallback: look for direct HLS
+      
       const scripts = $2("script").map((_, el) => $2(el).html()).get().join("\n");
       const m3u8 = scripts.match(/["']([^"']+\.m3u8[^"']*)/i);
       if (m3u8) return [makeStream(m3u8[1], "auto", "hls", "gogoanime", null, { Referer: new URL(iframeUrl).origin })];
@@ -1471,7 +1452,7 @@ async function scrapeGogoAnime(anilistId, episodeNum) {
   }
 }
 
-/* ─────────────────────────── STREAM AGGREGATOR ─────────────────────────── */
+                                                                               
 
 async function gatherMovieStreams(imdbId, tmdbId) {
   const cacheKey = `streams:movie:${imdbId}`;
@@ -1560,7 +1541,7 @@ async function gatherAnimeStreams(anilistId, episodeNum, subType = "sub") {
   return payload;
 }
 
-/* ─────────────────────────── SUBTITLE SCRAPER ─────────────────────────── */
+                                                                              
 
 async function scrapeSubtitles(imdbId, season = null, episode = null, lang = "en") {
   const cacheKey = `subs:${imdbId}:${season}:${episode}:${lang}`;
@@ -1568,7 +1549,7 @@ async function scrapeSubtitles(imdbId, season = null, episode = null, lang = "en
   if (cached) return cached;
 
   try {
-    // OpenSubtitles public search (no API key needed for basic search)
+    
     const params = new URLSearchParams({
       imdb_id: imdbId.replace("tt", ""),
       languages: lang,
@@ -1603,9 +1584,8 @@ async function scrapeSubtitles(imdbId, season = null, episode = null, lang = "en
   }
 }
 
-/* ─────────────────────────── ROUTES ─────────────────────────── */
+                                                                    
 
-// Helper to register route with consistent error handling
 function route(method, path, handler) {
   app[method.toLowerCase()](path, async (req, reply) => {
     try {
@@ -1620,7 +1600,7 @@ function route(method, path, handler) {
   });
 }
 
-/* ── MOVIES ── */
+                  
 
 route("GET", "/cn/v1/movie/search", async ({ q, page = 1 }) => {
   if (!q) throw new Error("Missing q");
@@ -1649,7 +1629,7 @@ route("GET", "/cn/v1/movie/details", async ({ id }) => {
 
 route("GET", "/cn/v1/movie/stream", async ({ id, quality }) => {
   if (!id) throw new Error("Missing id");
-  // Accept TMDB ID or IMDB ID
+  
   let imdbId = String(id).startsWith("tt") ? id : await getImdbId(id, "movie");
   if (!imdbId) throw new Error("Could not resolve IMDB ID for this movie");
   const payload = await gatherMovieStreams(imdbId, id);
@@ -1803,7 +1783,7 @@ route("GET", "/cn/v1/movie/discover", async ({ page = 1, sort_by = "popularity.d
   return { page: r.page, total_pages: r.total_pages, total_results: r.total_results, results: (r.results || []).map(mapMovie) };
 });
 
-/* ── TV SHOWS ── */
+                    
 
 route("GET", "/cn/v1/tv/search", async ({ q, page = 1 }) => {
   if (!q) throw new Error("Missing q");
@@ -2011,7 +1991,7 @@ route("GET", "/cn/v1/tv/discover", async ({ page = 1, sort_by = "popularity.desc
   return { page: r.page, total_pages: r.total_pages, total_results: r.total_results, results: (r.results || []).map(mapTV) };
 });
 
-/* ── ANIME ── */
+                 
 
 route("GET", "/cn/v1/anime/search", async ({ q, page = 1 }) => {
   if (!q) throw new Error("Missing q");
@@ -2107,14 +2087,14 @@ route("GET", "/cn/v1/anime/season", async ({ season, year, page = 1 }) => {
 
 route("GET", "/cn/v1/anime/episodes", async ({ id }) => {
   if (!id) throw new Error("Missing id");
-  // Get episode list from Zoro
+  
   const aniData = await anilistQuery(`query($id:Int){Media(id:$id,type:ANIME){id episodes title{romaji english} status}}`, { id: parseInt(id) });
   const anime = aniData?.data?.Media;
   if (!anime) throw new Error("Anime not found");
 
   const results = await zoroSearch(anime.title?.english || anime.title?.romaji || "");
   if (!results.length) {
-    // Return basic episode list from AniList data
+    
     const count = anime.episodes || 0;
     return {
       id: parseInt(id), title: anime.title?.english || anime.title?.romaji,
@@ -2144,7 +2124,7 @@ route("GET", "/cn/v1/anime/related", async ({ id }) => {
   };
 });
 
-/* ── SUBTITLES ── */
+                     
 
 route("GET", "/cn/v1/subtitles", async ({ id, type = "movie", season, episode, lang = "en" }) => {
   if (!id) throw new Error("Missing id");
@@ -2171,7 +2151,7 @@ route("GET", "/cn/v1/subtitles/languages", async ({ id, type = "movie", season, 
   return { id, imdb_id: imdbId, languages: Object.values(langs) };
 });
 
-/* ── SEARCH ── */
+                  
 
 route("GET", "/cn/v1/search/multi", async ({ q, page = 1 }) => {
   if (!q) throw new Error("Missing q");
@@ -2209,7 +2189,7 @@ route("GET", "/cn/v1/search/company", async ({ q, page = 1 }) => {
   return { page: r.page, total_pages: r.total_pages, results: (r.results || []).map((c) => ({ id: c.id, name: c.name, logo: c.logo_path ? `${IMG_W500}${c.logo_path}` : null, country: c.origin_country })) };
 });
 
-/* ── PEOPLE ── */
+                  
 
 route("GET", "/cn/v1/person/details", async ({ id }) => {
   if (!id) throw new Error("Missing id");
@@ -2260,7 +2240,7 @@ route("GET", "/cn/v1/person/popular", async ({ page = 1 }) => {
   };
 });
 
-/* ── CONVERT ── */
+                   
 
 route("GET", "/cn/v1/convert/imdb/:imdb_id", async ({ imdb_id }) => {
   if (!imdb_id) throw new Error("Missing imdb_id");
@@ -2279,7 +2259,7 @@ route("GET", "/cn/v1/convert/tmdb/:tmdb_id", async ({ tmdb_id, type = "movie" })
   return { tmdb_id: parseInt(tmdb_id), type, imdb_id: r.imdb_id || null, tvdb_id: r.tvdb_id || null, wikidata_id: r.wikidata_id || null };
 });
 
-/* ── KEYS ── */
+                
 
 app.get("/cn/v1/keys/validate", async (req, reply) => {
   return reply.send(ok({ valid: true, key: req.apiKey, tier: req.keyMeta?.tier, name: req.keyMeta?.name, rate_limit_per_minute: req.keyMeta?.rpm }));
@@ -2298,7 +2278,7 @@ app.get("/cn/v1/keys/usage", async (req, reply) => {
   }));
 });
 
-/* ── SYSTEM ── */
+                  
 
 app.get("/cn/v1/health", async (req, reply) => {
   return reply.send(ok({
@@ -2325,7 +2305,7 @@ app.get("/cn/v1/status", async (req, reply) => {
 });
 
 app.delete("/cn/v1/system/cache/clear", async (req, reply) => {
-  // Only allow master/enterprise keys to clear cache
+  
   if (req.keyMeta?.tier !== "enterprise") {
     return reply.code(403).send(fail("Enterprise tier required"));
   }
@@ -2335,12 +2315,12 @@ app.delete("/cn/v1/system/cache/clear", async (req, reply) => {
 
 app.delete("/cn/v1/system/cache/streams", async (req, reply) => {
   if (req.keyMeta?.tier !== "enterprise") return reply.code(403).send(fail("Enterprise tier required"));
-  // Selective clear not available with keyv directly — clear all
+  
   await cacheClear();
   return reply.send(ok({ cleared: true }));
 });
 
-/* ── ROOT EXPLORER ── */
+                         
 
 function buildSchema() {
   const P = (name, type = "string", req = false, example = "") => ({ name, type, req, example });
@@ -2585,14 +2565,14 @@ app.get("/cn", async (req, reply) => reply.type("text/html").send(EXPLORER_HTML)
 app.get("/cn/v1", async (req, reply) => reply.type("text/html").send(EXPLORER_HTML));
 app.get("/favicon.ico", async (req, reply) => reply.code(204).send());
 
-/* ─────────────────────────── STARTUP ─────────────────────────── */
+                                                                     
 
 async function start() {
   try {
-    // Init Playwright pool
+    
     await pool.init();
 
-    // Start server
+    
     await app.listen({ port: PORT, host: "0.0.0.0" });
     console.log(`\n  🎬  Cine API`);
     console.log(`  ↳  http://localhost:${PORT}`);
@@ -2604,7 +2584,6 @@ async function start() {
   }
 }
 
-// Graceful shutdown
 async function shutdown(signal) {
   console.log(`\n[${signal}] Shutting down gracefully...`);
   await pool.destroy();
