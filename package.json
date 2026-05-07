@@ -1,0 +1,25 @@
+{
+  "name": "cine-api",
+  "version": "1.0.0",
+  "description": "Cine API — self-scraping movie, TV & anime stream API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@fastify/compress": "^8.0.0",
+    "@fastify/cors": "^10.0.0",
+    "@keyv/sqlite": "^4.0.0",
+    "cheerio": "^1.0.0",
+    "fastify": "^5.2.0",
+    "got-scraping": "^4.0.4",
+    "keyv": "^5.2.3",
+    "playwright": "^1.50.0"
+  },
+  "devDependencies": {}
+}

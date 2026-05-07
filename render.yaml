@@ -1,23 +1,24 @@
 services:
   - type: web
-    name: cineapi
+    name: cine-api
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: free
+    plan: starter
     envVars:
       - key: PORT
-        value: 8000
-      - key: MASTER_API_KEY
-        generateValue: true
-      - key: CLOUDFLARE_API_TOKEN
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: TMDB_KEY
         sync: false
-      - key: CLOUDFLARE_ZONE_ID
+      - key: API_KEYS
         sync: false
-      - key: DOWNLOAD_DIR
-        value: /tmp/cineapi_downloads
-      - key: DOWNLOAD_TTL_HOURS
+      - key: CACHE_DB_PATH
+        value: /data/cache.sqlite
+      - key: PLAYWRIGHT_POOL_SIZE
         value: 2
-      - key: MAX_CONCURRENT_DOWNLOADS
-        value: 3
-    healthCheckPath: /health
-    autoDeploy: true
+    disk:
+      name: cine-data
+      mountPath: /data
+      sizeGB: 1
+    healthCheckPath: /cn/v1/health

@@ -5,7 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "uvicorn main:app --host 0.0.0.0 --port $PORT",
+    "startCommand": "node src/index.js",
+    "healthcheckPath": "/cn/v1/health",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   }
