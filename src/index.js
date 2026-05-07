@@ -200,7 +200,7 @@ async function httpGet(url, { headers = {}, timeout = SCRAPER_TIMEOUT, json = fa
     url,
     headers: h,
     timeout: { request: timeout },
-    followRedirects: true,
+    followRedirect: true,
     https: { rejectUnauthorized: false },
     retry: { limit: 2, methods: ["GET"], statusCodes: [408, 429, 500, 502, 503, 504] },
   });
@@ -225,7 +225,7 @@ async function httpPost(url, { body = {}, headers = {}, timeout = SCRAPER_TIMEOU
     headers: h,
     body: JSON.stringify(body),
     timeout: { request: timeout },
-    followRedirects: true,
+    followRedirect: true,
     https: { rejectUnauthorized: false },
     retry: { limit: 1, methods: ["POST"] },
   });
@@ -703,7 +703,7 @@ function makeStream(url, quality, format, provider, server = null, headers = nul
 
 async function validateStreamUrl(url) {
   try {
-    const resp = await gotScraping({ url, method: "HEAD", timeout: { request: 5000 }, followRedirects: true, https: { rejectUnauthorized: false } });
+    const resp = await gotScraping({ url, method: "HEAD", timeout: { request: 5000 }, followRedirect: true, https: { rejectUnauthorized: false } });
     return resp.statusCode >= 200 && resp.statusCode < 400;
   } catch { return false; }
 }
