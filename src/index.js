@@ -708,771 +708,253 @@ async function validateStreamUrl(url) {
   } catch { return false; }
 }
 
-                                                                             
 
-const FLIXHQ_BASE = "https://flixhq.to";
-
-const RABBIT_KEY = "8b5fa756190740d5901c4a52bccc5a39";
-
-async function flixhqSearch(title, type = "movie") {
+async function interceptStreams(embedUrl, referer, timeout = 28000) {
+  if (!pool.ready) return [];
+  const slot = await pool.acquire();
+  const streams = [];
+  const seen = new Set();
+  let context;
   try {
-    const html = await hybridGet(`${FLIXHQ_BASE}/search/${encodeURIComponent(title)}`, { referer: FLIXHQ_BASE });
-    const $ = cheerio.load(html);
-    const results = [];
-    $(".film_list-wrap .flw-item").each((_, el) => {
-      const $el = $(el);
-      const link = $el.find(".film-name a").attr("href") || "";
-      const name = $el.find(".film-name a").text().trim();
-      const typeTag = $el.find(".fdi-type").text().trim().toLowerCase();
-      if (type === "movie" && !link.includes("/movie/")) return;
-      if (type === "tv" && !link.includes("/tv/")) return;
-      const id = link.split("-").pop();
-      if (id) results.push({ id, name, link: `${FLIXHQ_BASE}${link}` });
-    });
-    return results;
-  } catch (e) {
-    console.error(`[flixhq] search error: ${e.message}`);
-    return [];
-  }
-}
-
-async function flixhqGetServers(contentId, isTV = false, episodeId = null) {
-  try {
-    const url = isTV
-      ? `${FLIXHQ_BASE}/ajax/v2/episode/servers/${episodeId}`
-      : `${FLIXHQ_BASE}/ajax/movie/episodes/${contentId}`;
-    const data = await httpGet(url, {
-      json: false,
-      referer: FLIXHQ_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/plain, */*" },
-    });
-    let html;
-    try { html = JSON.parse(data)?.html || data; } catch { html = data; }
-    const $ = cheerio.load(html);
-    const servers = [];
-    $(".server-item, .nav-item").each((_, el) => {
-      const $el = $(el);
-      const id = $el.attr("data-id") || $el.find("a").attr("data-id");
-      const name = $el.find("a").text().trim() || $el.text().trim();
-      if (id) servers.push({ id, name: name.toLowerCase() });
-    });
-    return servers;
-  } catch (e) {
-    console.error(`[flixhq] getServers error: ${e.message}`);
-    return [];
-  }
-}
-
-async function flixhqGetEpisodeId(contentId, season, episode) {
-  try {
-    const seasonsHtml = await httpGet(`${FLIXHQ_BASE}/ajax/v2/tv/seasons/${contentId}`, {
-      referer: FLIXHQ_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    let seasonsData;
-    try { seasonsData = JSON.parse(seasonsHtml); } catch { seasonsData = { html: seasonsHtml }; }
-    const $s = cheerio.load(seasonsData?.html || seasonsHtml);
-    const seasonItems = [];
-    $s(".ss-item").each((_, el) => seasonItems.push({ id: $s(el).attr("data-id"), num: parseInt($s(el).text().trim()) }));
-    const targetSeason = seasonItems.find((s) => s.num === parseInt(season)) || seasonItems[parseInt(season) - 1];
-    if (!targetSeason) return null;
-
-    const epsHtml = await httpGet(`${FLIXHQ_BASE}/ajax/v2/season/episodes/${targetSeason.id}`, {
-      referer: FLIXHQ_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    let epsData;
-    try { epsData = JSON.parse(epsHtml); } catch { epsData = { html: epsHtml }; }
-    const $e = cheerio.load(epsData?.html || epsHtml);
-    const episodes = [];
-    $e(".ep-item, .eps-item").each((_, el) => {
-      episodes.push({ id: $e(el).attr("data-id"), num: parseInt($e(el).attr("data-number") || $e(el).attr("title") || "") });
-    });
-    const targetEp = episodes.find((e) => e.num === parseInt(episode)) || episodes[parseInt(episode) - 1];
-    return targetEp?.id || null;
-  } catch (e) {
-    console.error(`[flixhq] getEpisodeId error: ${e.message}`);
-    return null;
-  }
-}
-
-async function flixhqExtractSource(serverId) {
-  try {
-    const data = await httpGet(`${FLIXHQ_BASE}/ajax/sources/${serverId}`, {
-      json: true,
-      referer: FLIXHQ_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    const embedUrl = data?.link || data?.url;
-    if (!embedUrl) return [];
-
-    
-    if (embedUrl.includes("rabbitstream") || embedUrl.includes("rapid-cloud")) {
-      return await extractRabbitStream(embedUrl, FLIXHQ_BASE);
-    }
-    
-    if (embedUrl.includes("upcloud") || embedUrl.includes("dood") || embedUrl.includes("vidcloud")) {
-      return await extractUpCloud(embedUrl, FLIXHQ_BASE);
-    }
-    
-    return await extractGenericEmbed(embedUrl, FLIXHQ_BASE);
-  } catch (e) {
-    console.error(`[flixhq] extractSource error: ${e.message}`);
-    return [];
-  }
-}
-
-async function extractRabbitStream(embedUrl, referer) {
-  try {
-    const parsed = new URL(embedUrl);
-    const vid = parsed.pathname.split("/").pop().split("?")[0];
-    const host = parsed.origin;
-
-    const html = await hybridGet(embedUrl, { referer });
-    
-    const keyMatch = html.match(/getSources\.php[^"']*/);
-    const e1Match = html.match(/var\s+e1\s*=\s*"([^"]+)"/);
-    const e2Match = html.match(/var\s+e2\s*=\s*"([^"]+)"/);
-
-    const sourcesUrl = `${host}/ajax/embed-6/getSources?id=${vid}`;
-    const sourcesData = await httpGet(sourcesUrl, {
-      json: true,
-      referer: embedUrl,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
+    context = await slot.browser.newContext({
+      userAgent: randomUA(),
+      viewport: { width: 1920, height: 1080 },
+      ignoreHTTPSErrors: true,
+      extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9", "Referer": referer },
     });
 
-    if (!sourcesData) return [];
-
-    let sources = sourcesData.sources;
-    
-    if (typeof sources === "string") {
-      
-      try {
-        const decrypted = rc4Decrypt(RABBIT_KEY, sources);
-        sources = JSON.parse(decrypted);
-      } catch {
-        
-        if (e1Match && e2Match) {
-          try {
-            const dec = aesDecrypt(sources, e1Match[1].padEnd(32, "0").slice(0, 32), e2Match[1].padEnd(16, "0").slice(0, 16));
-            sources = JSON.parse(dec);
-          } catch { sources = []; }
-        } else {
-          sources = [];
-        }
+    context.on("request", (req) => {
+      const u = req.url();
+      if (seen.has(u)) return;
+      if (
+        (u.includes(".m3u8") || u.includes(".mp4") || u.includes("master.m3u8") || u.includes("/playlist/")) &&
+        !u.includes("analytics") && !u.includes("tracking")
+      ) {
+        seen.add(u);
+        streams.push(u);
       }
+    });
+
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      window.chrome = { runtime: {} };
+      Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3] });
+    });
+
+    await page.goto(embedUrl, { waitUntil: "networkidle", timeout }).catch(() => {});
+    await page.waitForTimeout(4000);
+
+    try {
+      await page.click(
+        "button.play, .play-btn, [class*=\"play\"], .jw-icon-display, .vjs-big-play-button, video, [data-plyr=\"play\"]",
+        { timeout: 2000 }
+      );
+      await page.waitForTimeout(4000);
+    } catch {}
+
+    if (streams.length === 0) {
+      await page.waitForTimeout(3000);
     }
+  } catch {}
 
-    const streams = [];
-    for (const s of (sources || [])) {
-      if (s.file || s.url) {
-        streams.push(makeStream(s.file || s.url, s.label || "auto", "hls", "flixhq", "rabbitstream", { Referer: host, Origin: host }));
-      }
-    }
-
-    
-    const tracks = sourcesData.tracks || [];
-    if (streams.length > 0) streams[0].subtitles_embedded = tracks.filter((t) => t.kind === "captions").length > 0;
-
-    return streams;
-  } catch (e) {
-    console.error(`[rabbitstream] error: ${e.message}`);
-    return [];
-  }
+  if (context) await context.close().catch(() => {});
+  pool.release(slot);
+  return [...new Set(streams)];
 }
 
-async function extractUpCloud(embedUrl, referer) {
-  try {
-    const html = await hybridGet(embedUrl, { referer });
-    const $ = cheerio.load(html);
-
-    
-    const scriptContent = $("script").map((_, el) => $(el).html()).get().join("\n");
-    const m3u8Match = scriptContent.match(/file:\s*["']([^"']+\.m3u8[^"']*)/i)
-      || scriptContent.match(/src:\s*["']([^"']+\.m3u8[^"']*)/i);
-    if (m3u8Match) {
-      return [makeStream(m3u8Match[1], "auto", "hls", "flixhq", "upcloud", { Referer: new URL(embedUrl).origin })];
-    }
-
-    const mp4Match = scriptContent.match(/file:\s*["']([^"']+\.mp4[^"']*)/i);
-    if (mp4Match) {
-      return [makeStream(mp4Match[1], "auto", "mp4", "flixhq", "upcloud", { Referer: new URL(embedUrl).origin })];
-    }
-    return [];
-  } catch (e) {
-    console.error(`[upcloud] error: ${e.message}`);
-    return [];
-  }
+function streamsFromUrls(urls, provider, referer) {
+  return urls.map((u) =>
+    makeStream(u, "auto", u.includes(".m3u8") ? "hls" : "mp4", provider, null, { Referer: referer, Origin: new URL(referer).origin })
+  );
 }
 
-async function extractGenericEmbed(embedUrl, referer) {
+async function scrapeVidsrcXyz(imdbId, season = null, episode = null) {
   try {
-    const html = await hybridGet(embedUrl, { referer });
-    const $ = cheerio.load(html);
-    const scriptContent = $("script").map((_, el) => $(el).html()).get().join("\n");
-    const m3u8 = scriptContent.match(/["']([^"']+\.m3u8[^"']*)/i);
-    const mp4 = scriptContent.match(/["']([^"']+\.mp4[^"']*)/i);
-    const streams = [];
-    if (m3u8) streams.push(makeStream(m3u8[1], "auto", "hls", "flixhq", "embed", { Referer: new URL(embedUrl).origin }));
-    else if (mp4) streams.push(makeStream(mp4[1], "auto", "mp4", "flixhq", "embed", { Referer: new URL(embedUrl).origin }));
-    return streams;
+    const base = "https://vidsrc.xyz";
+    const url = season
+      ? `${base}/embed/tv?imdb=${imdbId}&season=${season}&episode=${episode}`
+      : `${base}/embed/movie?imdb=${imdbId}`;
+    const urls = await interceptStreams(url, base);
+    return streamsFromUrls(urls, "vidsrc.xyz", base);
   } catch { return []; }
 }
 
-async function scrapeFlixHQMovie(imdbId, title = null) {
+async function scrapeEmbedSu(imdbId, season = null, episode = null) {
   try {
-    const searchQuery = title || imdbId;
-    const results = await flixhqSearch(searchQuery, "movie");
-    if (!results.length) return [];
-    const content = results[0];
-    const servers = await flixhqGetServers(content.id, false);
-    const streams = [];
-    for (const server of servers.slice(0, 3)) {
-      const s = await flixhqExtractSource(server.id);
-      streams.push(...s);
-      if (streams.length >= 3) break;
-    }
-    return streams;
-  } catch (e) {
-    console.error(`[flixhq:movie] ${e.message}`);
-    return [];
-  }
-}
-
-async function scrapeFlixHQTV(imdbId, season, episode, title = null) {
-  try {
-    const searchQuery = title || imdbId;
-    const results = await flixhqSearch(searchQuery, "tv");
-    if (!results.length) return [];
-    const content = results[0];
-    const episodeId = await flixhqGetEpisodeId(content.id, season, episode);
-    if (!episodeId) return [];
-    const servers = await flixhqGetServers(content.id, true, episodeId);
-    const streams = [];
-    for (const server of servers.slice(0, 3)) {
-      const s = await flixhqExtractSource(server.id);
-      streams.push(...s);
-      if (streams.length >= 3) break;
-    }
-    return streams;
-  } catch (e) {
-    console.error(`[flixhq:tv] ${e.message}`);
-    return [];
-  }
-}
-
-                                                                                
-
-const VIDSRCTO_BASE = "https://vidsrc.xyz";
-
-async function scrapeVidsrcTo(imdbId, season = null, episode = null) {
-  try {
+    const base = "https://embed.su";
     const url = season
-      ? `${VIDSRCTO_BASE}/embed/tv?imdb=${imdbId}&season=${season}&episode=${episode}`
-      : `${VIDSRCTO_BASE}/embed/movie?imdb=${imdbId}`;
-
-    const html = await hybridGet(url, { referer: VIDSRCTO_BASE });
-    const $ = cheerio.load(html);
-
-    
-    const providerEls = [];
-    $("[data-hash]").each((_, el) => { providerEls.push($(el).attr("data-hash")); });
-
-    if (!providerEls.length) {
-      
-      const scriptContent = $("script").map((_, el) => $(el).html()).get().join("\n");
-      const hashMatch = scriptContent.match(/data-hash="([^"]+)"/);
-      if (hashMatch) providerEls.push(hashMatch[1]);
-    }
-
-    const streams = [];
-    for (const hash of providerEls.slice(0, 3)) {
-      try {
-        const srcData = await httpGet(`${VIDSRCTO_BASE}/ajax/embed/episode/${hash}/sources`, {
-          json: true, referer: url, headers: { "X-Requested-With": "XMLHttpRequest" },
-        });
-        for (const src of (srcData || [])) {
-          const detail = await httpGet(`${VIDSRCTO_BASE}/ajax/embed/source/${src.id}`, {
-            json: true, referer: url, headers: { "X-Requested-With": "XMLHttpRequest" },
-          });
-          if (detail?.url) {
-            
-            let streamUrl = detail.url;
-            try {
-              if (!streamUrl.startsWith("http")) {
-                streamUrl = xorDecrypt(base64Decode(streamUrl), "WXrUARXb1aDLaZjI");
-              }
-            } catch {}
-            if (streamUrl.startsWith("http")) {
-              streams.push(makeStream(streamUrl, src.quality || "auto", streamUrl.includes(".m3u8") ? "hls" : "mp4", "vidsrc.to", src.title || null, { Referer: VIDSRCTO_BASE }));
-            }
-          }
-        }
-        if (streams.length > 0) break;
-      } catch {}
-    }
-    return streams;
-  } catch (e) {
-    console.error(`[vidsrc.to] ${e.message}`);
-    return [];
-  }
+      ? `${base}/embed/tv/${imdbId}/${season}/${episode}`
+      : `${base}/embed/movie/${imdbId}`;
+    const urls = await interceptStreams(url, base);
+    return streamsFromUrls(urls, "embed.su", base);
+  } catch { return []; }
 }
 
-                                                                                
-
-const VIDSRCME_BASE = "https://vidsrc.me";
-
-async function scrapeVidsrcMe(imdbId, season = null, episode = null) {
+async function scrapeVidlink(tmdbId, season = null, episode = null) {
   try {
+    const base = "https://vidlink.pro";
     const url = season
-      ? `${VIDSRCME_BASE}/embed/tv?imdb=${imdbId}&season=${season}&episode=${episode}`
-      : `${VIDSRCME_BASE}/embed/movie?imdb=${imdbId}`;
-
-    const html = await hybridGet(url, { referer: VIDSRCME_BASE });
-    const $ = cheerio.load(html);
-
-    
-    const iframeSrc = $("iframe#player_iframe, iframe.vidplay").attr("src") || "";
-    if (!iframeSrc) return [];
-
-    const iframeUrl = iframeSrc.startsWith("//") ? `https:${iframeSrc}` : iframeSrc;
-    const iframeHtml = await hybridGet(iframeUrl, { referer: url });
-    const $2 = cheerio.load(iframeHtml);
-
-    
-    const dataHash = $2("[data-hash]").attr("data-hash")
-      || iframeHtml.match(/data-hash="([^"]+)"/)?.[1];
-    if (!dataHash) return [];
-
-    
-    const sourcesUrl = `${new URL(iframeUrl).origin}/ajax/embed/episode/${dataHash}/sources`;
-    const sourcesData = await httpGet(sourcesUrl, {
-      json: true, referer: iframeUrl, headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-
-    const streams = [];
-    for (const src of (sourcesData || [])) {
-      try {
-        const detail = await httpGet(`${new URL(iframeUrl).origin}/ajax/embed/source/${src.id}`, {
-          json: true, referer: iframeUrl, headers: { "X-Requested-With": "XMLHttpRequest" },
-        });
-        if (detail?.url) {
-          let streamUrl = detail.url;
-          try {
-            if (!streamUrl.startsWith("http")) {
-              
-              const decoded = base64Decode(streamUrl);
-              streamUrl = xorDecrypt(decoded, "WXrUARXb1aDLaZjI");
-            }
-          } catch {}
-          if (streamUrl.startsWith("http")) {
-            streams.push(makeStream(streamUrl, src.quality || "auto", streamUrl.includes(".m3u8") ? "hls" : "mp4", "vidsrc.me", src.title || null, { Referer: VIDSRCME_BASE }));
-          }
-        }
-      } catch {}
-    }
-    return streams;
-  } catch (e) {
-    console.error(`[vidsrc.me] ${e.message}`);
-    return [];
-  }
+      ? `${base}/tv/${tmdbId}/${season}/${episode}`
+      : `${base}/movie/${tmdbId}`;
+    const urls = await interceptStreams(url, base);
+    return streamsFromUrls(urls, "vidlink", base);
+  } catch { return []; }
 }
 
-                                                                           
-
-const RIVE_BASE = "https://rivestream.live";
-
-async function scrapeRive(tmdbId, type = "movie", season = null, episode = null) {
+async function scrape2EmbedDirect(imdbId, season = null, episode = null) {
   try {
-    const url = type === "movie"
-      ? `${RIVE_BASE}/watch?type=movie&id=${tmdbId}`
-      : `${RIVE_BASE}/watch?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`;
-
-    const html = await hybridGet(url, { referer: RIVE_BASE });
-    const $ = cheerio.load(html);
-
-    
-    const nextDataRaw = $("#__NEXT_DATA__").html() || $("script#__NEXT_DATA__").html();
-    if (!nextDataRaw) return [];
-
-    let nextData;
-    try { nextData = JSON.parse(nextDataRaw); } catch { return []; }
-
-    
-    const pageProps = nextData?.props?.pageProps || {};
-    const sources = pageProps?.sources || pageProps?.streams || pageProps?.data?.sources || [];
-
-    if (Array.isArray(sources) && sources.length > 0) {
-      return sources.map((s) => makeStream(s.url || s.file, s.quality || s.label || "auto", (s.url || s.file || "").includes(".m3u8") ? "hls" : "mp4", "rive", s.server || null, { Referer: RIVE_BASE, Origin: RIVE_BASE }));
-    }
-
-    
-    const apiUrl = type === "movie"
-      ? `${RIVE_BASE}/api/backendfetch?requestID=movie-${tmdbId}`
-      : `${RIVE_BASE}/api/backendfetch?requestID=tv-${tmdbId}-${season}-${episode}`;
-    const apiData = await httpGet(apiUrl, {
-      json: true, referer: url,
-      headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json" },
-    });
-
-    const apiSources = apiData?.data?.sources || apiData?.sources || [];
-    return apiSources.map((s) => makeStream(s.url || s.file, s.quality || "auto", (s.url || "").includes(".m3u8") ? "hls" : "mp4", "rive", null, { Referer: RIVE_BASE }));
-  } catch (e) {
-    console.error(`[rive] ${e.message}`);
-    return [];
-  }
-}
-
-                                                                             
-
-const TWOEMBED_BASE = "https://www.2embed.cc";
-
-async function scrape2Embed(imdbId, season = null, episode = null) {
-  try {
+    const base = "https://www.2embed.cc";
     const url = season
-      ? `${TWOEMBED_BASE}/embedtv/${imdbId}&s=${season}&e=${episode}`
-      : `${TWOEMBED_BASE}/embed/${imdbId}`;
-
-    const html = await hybridGet(url, { referer: TWOEMBED_BASE });
-    const $ = cheerio.load(html);
-
-    
-    const iframes = [];
-    $("iframe").each((_, el) => {
-      const src = $(el).attr("src") || $(el).attr("data-src") || "";
-      if (src && (src.includes("stream") || src.includes("embed") || src.includes("vid") || src.includes("play"))) {
-        iframes.push(src.startsWith("//") ? `https:${src}` : src.startsWith("http") ? src : `${TWOEMBED_BASE}${src}`);
-      }
-    });
-
-    if (!iframes.length) {
-      
-      const scripts = $("script").map((_, el) => $(el).html()).get().join("\n");
-      const m3u8 = scripts.match(/["']([^"']+\.m3u8[^"']*)/i);
-      if (m3u8) return [makeStream(m3u8[1], "auto", "hls", "2embed", null, { Referer: TWOEMBED_BASE })];
-      return [];
-    }
-
-    const streams = [];
-    for (const iframeSrc of iframes.slice(0, 3)) {
-      try {
-        const frameHtml = await hybridGet(iframeSrc, { referer: url });
-        const $f = cheerio.load(frameHtml);
-        const scripts = $f("script").map((_, el) => $f(el).html()).get().join("\n");
-        const m3u8 = scripts.match(/["']([^"']+\.m3u8[^"']*)/i) || scripts.match(/file:\s*["']([^"']+\.m3u8[^"']*)/i);
-        const mp4 = scripts.match(/file:\s*["']([^"']+\.mp4[^"']*)/i);
-        const origin = new URL(iframeSrc).origin;
-        if (m3u8) streams.push(makeStream(m3u8[1], "auto", "hls", "2embed", null, { Referer: origin, Origin: origin }));
-        else if (mp4) streams.push(makeStream(mp4[1], "auto", "mp4", "2embed", null, { Referer: origin, Origin: origin }));
-      } catch {}
-      if (streams.length > 0) break;
-    }
-    return streams;
-  } catch (e) {
-    console.error(`[2embed] ${e.message}`);
-    return [];
-  }
+      ? `${base}/embedtv/${imdbId}&s=${season}&e=${episode}`
+      : `${base}/embed/${imdbId}`;
+    const urls = await interceptStreams(url, base);
+    return streamsFromUrls(urls, "2embed", base);
+  } catch { return []; }
 }
 
-                                                                                            
-
-const ZORO_BASE = "https://hianime.to";
-
-const ZORO_KEY = "8z+sQGfJ0e7UYU0nJmJeKXXZdHHf0M8KdHHf0M8KBEE=";
-
-async function zoroSearch(title) {
+async function scrapeMultiEmbed(imdbId, season = null, episode = null) {
   try {
-    const html = await hybridGet(`${ZORO_BASE}/search?keyword=${encodeURIComponent(title)}`, { referer: ZORO_BASE });
-    const $ = cheerio.load(html);
-    const results = [];
-    $(".flw-item").each((_, el) => {
-      const $el = $(el);
-      const link = $el.find(".film-name a").attr("href") || "";
-      const name = $el.find(".film-name a").text().trim();
-      const id = link.split("-").pop().split("?")[0];
-      if (id && name) results.push({ id, name, link: `${ZORO_BASE}${link}` });
-    });
-    return results;
-  } catch (e) {
-    console.error(`[zoro] search error: ${e.message}`);
-    return [];
-  }
+    const base = "https://multiembed.mov";
+    const url = season
+      ? `${base}/directstream.php?video_id=${imdbId}&s=${season}&e=${episode}`
+      : `${base}/directstream.php?video_id=${imdbId}`;
+    const urls = await interceptStreams(url, base);
+    return streamsFromUrls(urls, "multiembed", base);
+  } catch { return []; }
 }
 
-async function zoroGetEpisodes(animeId) {
+async function scrapeHiAnimeEpisode(anilistId, episodeNum, subType = "sub") {
   try {
-    const data = await httpGet(`${ZORO_BASE}/ajax/v2/episode/list/${animeId}`, {
-      json: false, referer: `${ZORO_BASE}/watch/${animeId}`,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    let html;
-    try { html = JSON.parse(data)?.html || data; } catch { html = data; }
-    const $ = cheerio.load(html);
-    const episodes = [];
-    $(".ep-item").each((_, el) => {
-      const $el = $(el);
-      const id = $el.attr("data-id");
-      const num = parseInt($el.attr("data-number") || "0", 10);
-      const title = $el.attr("title") || $el.find(".ep-name").text().trim() || `Episode ${num}`;
-      if (id) episodes.push({ id, number: num, title });
-    });
-    return episodes;
-  } catch (e) {
-    console.error(`[zoro] getEpisodes error: ${e.message}`);
-    return [];
-  }
-}
-
-async function zoroGetServers(episodeId) {
-  try {
-    const data = await httpGet(`${ZORO_BASE}/ajax/v2/episode/servers?episodeId=${episodeId}`, {
-      json: false, referer: ZORO_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    let html;
-    try { html = JSON.parse(data)?.html || data; } catch { html = data; }
-    const $ = cheerio.load(html);
-    const servers = [];
-    $(".server-item").each((_, el) => {
-      const $el = $(el);
-      const id = $el.attr("data-id") || $el.attr("data-server-id");
-      const name = $el.text().trim().toLowerCase();
-      const type = $el.attr("data-type") || "sub";
-      if (id) servers.push({ id, name, type });
-    });
-    return servers;
-  } catch (e) {
-    console.error(`[zoro] getServers error: ${e.message}`);
-    return [];
-  }
-}
-
-async function zoroExtractSource(serverId) {
-  try {
-    const data = await httpGet(`${ZORO_BASE}/ajax/v2/episode/sources?id=${serverId}`, {
-      json: true, referer: ZORO_BASE,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    if (!data?.link) return [];
-    const embedUrl = data.link;
-
-    
-    if (embedUrl.includes("megacloud") || embedUrl.includes("rapid-cloud") || embedUrl.includes("rabbitstream")) {
-      return await extractRabbitStream(embedUrl, ZORO_BASE);
-    }
-
-    
-    return await extractGenericEmbed(embedUrl, ZORO_BASE);
-  } catch (e) {
-    console.error(`[zoro] extractSource error: ${e.message}`);
-    return [];
-  }
-}
-
-async function scrapeZoroAnime(anilistId, episodeNum, subType = "sub") {
-  try {
-    
-    const aniData = await anilistQuery(`query($id:Int){Media(id:$id,type:ANIME){id title{romaji english}}}`, { id: anilistId });
+    const aniData = await anilistQuery(
+      `query($id:Int){Media(id:$id,type:ANIME){id title{romaji english} externalLinks{url site}}}`,
+      { id: anilistId }
+    );
     const title = aniData?.data?.Media?.title?.english || aniData?.data?.Media?.title?.romaji;
     if (!title) return [];
 
-    const searchResults = await zoroSearch(title);
-    if (!searchResults.length) return [];
-
-    
-    for (const result of searchResults.slice(0, 2)) {
-      const episodes = await zoroGetEpisodes(result.id);
-      const targetEp = episodes.find((e) => e.number === episodeNum) || episodes[episodeNum - 1];
-      if (!targetEp) continue;
-
-      const servers = await zoroGetServers(targetEp.id);
-      
-      const preferred = servers.filter((s) => s.type === subType);
-      const fallback = servers.filter((s) => s.type !== subType);
-      const orderedServers = [...preferred, ...fallback];
-
-      for (const server of orderedServers.slice(0, 3)) {
-        const streams = await zoroExtractSource(server.id);
-        if (streams.length > 0) {
-          return streams.map((s) => ({ ...s, sub_type: server.type, provider: "zoro/aniwatch" }));
-        }
-      }
-    }
-    return [];
-  } catch (e) {
-    console.error(`[zoro] anime scrape error: ${e.message}`);
-    return [];
-  }
-}
-
-                                                                                
-
-const GOGO_BASE = "https://anitaku.pe";
-const GOGO_AJAX = "https://ajax.gogocdn.net";
-
-const GOGO_IV   = Buffer.from("3232363936313634", "utf8");   
-const GOGO_KEY  = Buffer.from("37383866643737623638663538663163", "utf8"); 
-const GOGO_SECOND_KEY = Buffer.from("33363435363133343336333036343337", "utf8"); 
-
-function gogoDecrypt(data, key) {
-  const decipher = crypto.createDecipheriv("aes-256-cbc", key, GOGO_IV);
-  let dec = decipher.update(data, "base64", "utf8");
-  dec += decipher.final("utf8");
-  return dec;
-}
-
-function gogoEncrypt(data, key) {
-  const cipher = crypto.createCipheriv("aes-256-cbc", key, GOGO_IV);
-  let enc = cipher.update(data, "utf8", "base64");
-  enc += cipher.final("base64");
-  return enc;
-}
-
-async function gogoSearch(title) {
-  try {
-    const html = await hybridGet(`${GOGO_BASE}/search.html?keyword=${encodeURIComponent(title)}`, { referer: GOGO_BASE });
-    const $ = cheerio.load(html);
-    const results = [];
-    $(".items li").each((_, el) => {
-      const $el = $(el);
-      const link = $el.find(".name a").attr("href") || "";
-      const name = $el.find(".name a").text().trim();
-      if (link && name) results.push({ link: `${GOGO_BASE}${link}`, name });
-    });
-    return results;
-  } catch (e) {
-    console.error(`[gogo] search error: ${e.message}`);
-    return [];
-  }
-}
-
-async function gogoGetEpisodes(animeLink) {
-  try {
-    const html = await hybridGet(animeLink, { referer: GOGO_BASE });
-    const $ = cheerio.load(html);
-    const animeId = $("input#movie_id").val() || $("[data-id]").attr("data-id");
-    const epStart = $("input#default_ep").val() || "0";
-    const epEnd = $(".anime_video_body_episodes_r a").last().text() || "1";
+    const base = "https://hianime.to";
+    const searchHtml = await httpGet(`${base}/search?keyword=${encodeURIComponent(title)}`, { referer: base });
+    const $s = cheerio.load(searchHtml);
+    const firstResult = $s(".flw-item .film-name a").first();
+    const animeLink = firstResult.attr("href") || "";
+    const animeId = animeLink.split("-").pop()?.split("?")[0];
     if (!animeId) return [];
 
-    const data = await httpGet(`${GOGO_AJAX}/ajax/load-list-episode?ep_start=${epStart}&ep_end=${epEnd}&id=${animeId}`, {
-      json: true, referer: animeLink, headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-
-    if (!data?.html) return [];
-    const $2 = cheerio.load(data.html);
-    const episodes = [];
-    $2("li").each((_, el) => {
-      const $el = $2(el);
-      const link = $el.find("a").attr("href")?.trim();
-      const numText = $el.find(".name").text().trim();
-      const num = parseInt(numText.replace(/\D/g, "")) || 0;
-      if (link) episodes.push({ link: `${GOGO_BASE}${link}`, number: num });
-    });
-    return episodes.reverse();
-  } catch (e) {
-    console.error(`[gogo] getEpisodes error: ${e.message}`);
-    return [];
-  }
-}
-
-async function gogoExtractStream(episodeLink) {
-  try {
-    const html = await hybridGet(episodeLink, { referer: GOGO_BASE });
-    const $ = cheerio.load(html);
-    const iframeSrc = $("div.play-video iframe").attr("src") || $("iframe.iframe-embed").attr("src") || "";
-    if (!iframeSrc) return [];
-
-    const iframeUrl = iframeSrc.startsWith("//") ? `https:${iframeSrc}` : iframeSrc;
-    const iframeHtml = await hybridGet(iframeUrl, { referer: episodeLink });
-    const $2 = cheerio.load(iframeHtml);
-
-    
-    const cryptoScript = $2("script[data-name='episode']").attr("data-value");
-    if (!cryptoScript) {
-      
-      const scripts = $2("script").map((_, el) => $2(el).html()).get().join("\n");
-      const m3u8 = scripts.match(/["']([^"']+\.m3u8[^"']*)/i);
-      if (m3u8) return [makeStream(m3u8[1], "auto", "hls", "gogoanime", null, { Referer: new URL(iframeUrl).origin })];
-      return [];
-    }
-
-    const decrypted = gogoDecrypt(cryptoScript, GOGO_KEY);
-    const params = new URLSearchParams(decrypted);
-    const id = params.get("id") || new URL(iframeUrl).searchParams.get("id");
-    if (!id) return [];
-
-    const encId = gogoEncrypt(id, GOGO_KEY);
-    const token = gogoEncrypt(`${id}&alias=${id}`, GOGO_SECOND_KEY);
-
-    const ajaxUrl = `${new URL(iframeUrl).origin}/encrypt-ajax.php?id=${encodeURIComponent(encId)}&alias=${encodeURIComponent(token)}`;
-    const ajaxData = await httpGet(ajaxUrl, {
-      json: true, referer: iframeUrl,
+    const epRaw = await httpGet(`${base}/ajax/v2/episode/list/${animeId}`, {
+      referer: `${base}/watch/${animeId}`,
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
+    let epHtml;
+    try { epHtml = JSON.parse(epRaw)?.html || epRaw; } catch { epHtml = epRaw; }
+    const $e = cheerio.load(epHtml);
+    let targetEpId = null;
+    $e(".ep-item").each((_, el) => {
+      if (parseInt($e(el).attr("data-number")) === episodeNum) {
+        targetEpId = $e(el).attr("data-id");
+      }
+    });
+    if (!targetEpId) {
+      const all = [];
+      $e(".ep-item").each((_, el) => all.push($e(el).attr("data-id")));
+      targetEpId = all[episodeNum - 1] || null;
+    }
+    if (!targetEpId) return [];
 
-    if (!ajaxData?.data) return [];
-    const decSources = gogoDecrypt(ajaxData.data, GOGO_SECOND_KEY);
-    let sources;
-    try { sources = JSON.parse(decSources); } catch { return []; }
+    const srvRaw = await httpGet(`${base}/ajax/v2/episode/servers?episodeId=${targetEpId}`, {
+      referer: base,
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+    let srvHtml;
+    try { srvHtml = JSON.parse(srvRaw)?.html || srvRaw; } catch { srvHtml = srvRaw; }
+    const $srv = cheerio.load(srvHtml);
+    const servers = [];
+    $srv(".server-item").each((_, el) => {
+      const id = $srv(el).attr("data-id") || $srv(el).attr("data-server-id");
+      const type = $srv(el).attr("data-type") || "sub";
+      if (id) servers.push({ id, type });
+    });
 
-    const streams = [];
-    for (const s of (sources?.source || sources?.sources || [])) {
-      const file = s.file || s.url;
-      if (file) {
-        streams.push(makeStream(file, s.label || s.type || "auto", file.includes(".m3u8") ? "hls" : "mp4", "gogoanime", null, { Referer: new URL(iframeUrl).origin }));
+    const preferred = servers.filter((s) => s.type === subType);
+    const fallback = servers.filter((s) => s.type !== subType);
+    const ordered = [...preferred, ...fallback].slice(0, 3);
+
+    for (const srv of ordered) {
+      const srcData = await httpGet(`${base}/ajax/v2/episode/sources?id=${srv.id}`, {
+        json: true, referer: base,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      });
+      const embedUrl = srcData?.link;
+      if (!embedUrl) continue;
+      const urls = await interceptStreams(embedUrl, base);
+      if (urls.length > 0) {
+        return streamsFromUrls(urls, "hianime", base).map((s) => ({ ...s, sub_type: srv.type }));
       }
     }
-    return streams;
+    return [];
   } catch (e) {
-    console.error(`[gogo] extractStream error: ${e.message}`);
+    console.error(`[hianime] ${e.message}`);
     return [];
   }
 }
 
-async function scrapeGogoAnime(anilistId, episodeNum) {
+async function scrapeGogoEpisode(anilistId, episodeNum) {
   try {
-    const aniData = await anilistQuery(`query($id:Int){Media(id:$id,type:ANIME){id title{romaji english}}}`, { id: anilistId });
+    const aniData = await anilistQuery(
+      `query($id:Int){Media(id:$id,type:ANIME){id title{romaji english}}}`,
+      { id: anilistId }
+    );
     const title = aniData?.data?.Media?.title?.english || aniData?.data?.Media?.title?.romaji;
     if (!title) return [];
 
-    const results = await gogoSearch(title);
-    if (!results.length) return [];
+    const base = "https://anitaku.pe";
+    const searchHtml = await httpGet(`${base}/search.html?keyword=${encodeURIComponent(title)}`, { referer: base });
+    const $s = cheerio.load(searchHtml);
+    const firstLink = $s(".items li .name a").first().attr("href");
+    if (!firstLink) return [];
 
-    for (const result of results.slice(0, 2)) {
-      const episodes = await gogoGetEpisodes(result.link);
-      const targetEp = episodes.find((e) => e.number === episodeNum) || episodes[episodeNum - 1];
-      if (!targetEp) continue;
-      const streams = await gogoExtractStream(targetEp.link);
-      if (streams.length > 0) return streams;
-    }
-    return [];
+    const animeHtml = await httpGet(`${base}${firstLink}`, { referer: base });
+    const $a = cheerio.load(animeHtml);
+    const movieId = $a("#movie_id").attr("value");
+    const epStart = episodeNum;
+    const epEnd = episodeNum;
+    if (!movieId) return [];
+
+    const epData = await httpGet(
+      `https://ajax.gogocdn.net/ajax/load-list-episode?ep_start=${epStart}&ep_end=${epEnd}&id=${movieId}`,
+      { referer: base, headers: { "X-Requested-With": "XMLHttpRequest" } }
+    );
+    const $ep = cheerio.load(epData);
+    const epLink = $ep("li a").first().attr("href")?.trim();
+    if (!epLink) return [];
+
+    const epUrl = `${base}${epLink}`;
+    const epHtml = await httpGet(epUrl, { referer: base });
+    const $epPage = cheerio.load(epHtml);
+    const iframeSrc = $epPage("iframe#load_anime").attr("src") || $epPage("iframe").first().attr("src");
+    if (!iframeSrc) return [];
+
+    const embedUrl = iframeSrc.startsWith("http") ? iframeSrc : `https:${iframeSrc}`;
+    const urls = await interceptStreams(embedUrl, epUrl);
+    return streamsFromUrls(urls, "gogoanime", base);
   } catch (e) {
-    console.error(`[gogo] anime scrape error: ${e.message}`);
+    console.error(`[gogo] ${e.message}`);
     return [];
   }
 }
-
-                                                                               
 
 async function gatherMovieStreams(imdbId, tmdbId) {
   const cacheKey = `streams:movie:${imdbId}`;
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
-  let movieTitle = null;
-  try {
-    const meta = await tmdb(`/movie/${tmdbId}`);
-    movieTitle = meta?.title || meta?.original_title || null;
-  } catch {}
-
   const started = Date.now();
   const results = await Promise.allSettled([
-    scrapeFlixHQMovie(imdbId, movieTitle),
-    scrapeVidsrcTo(imdbId),
-    scrapeVidsrcMe(imdbId),
-    scrapeRive(tmdbId, "movie"),
-    scrape2Embed(imdbId),
+    scrapeVidsrcXyz(imdbId),
+    scrapeEmbedSu(imdbId),
+    scrapeVidlink(tmdbId),
+    scrape2EmbedDirect(imdbId),
+    scrapeMultiEmbed(imdbId),
   ]);
 
   const all = results.flatMap((r) => r.status === "fulfilled" ? r.value : []);
@@ -1496,19 +978,13 @@ async function gatherTVStreams(imdbId, tmdbId, season, episode) {
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
-  let showTitle = null;
-  try {
-    const meta = await tmdb(`/tv/${tmdbId}`);
-    showTitle = meta?.name || meta?.original_name || null;
-  } catch {}
-
   const started = Date.now();
   const results = await Promise.allSettled([
-    scrapeFlixHQTV(imdbId, season, episode, showTitle),
-    scrapeVidsrcTo(imdbId, season, episode),
-    scrapeVidsrcMe(imdbId, season, episode),
-    scrapeRive(tmdbId, "tv", season, episode),
-    scrape2Embed(imdbId, season, episode),
+    scrapeVidsrcXyz(imdbId, season, episode),
+    scrapeEmbedSu(imdbId, season, episode),
+    scrapeVidlink(tmdbId, season, episode),
+    scrape2EmbedDirect(imdbId, season, episode),
+    scrapeMultiEmbed(imdbId, season, episode),
   ]);
 
   const all = results.flatMap((r) => r.status === "fulfilled" ? r.value : []);
@@ -1534,8 +1010,8 @@ async function gatherAnimeStreams(anilistId, episodeNum, subType = "sub") {
 
   const started = Date.now();
   const results = await Promise.allSettled([
-    scrapeZoroAnime(anilistId, episodeNum, subType),
-    scrapeGogoAnime(anilistId, episodeNum),
+    scrapeHiAnimeEpisode(anilistId, episodeNum, subType),
+    scrapeGogoEpisode(anilistId, episodeNum),
   ]);
 
   const all = results.flatMap((r) => r.status === "fulfilled" ? r.value : []);
@@ -1554,7 +1030,6 @@ async function gatherAnimeStreams(anilistId, episodeNum, subType = "sub") {
   return payload;
 }
 
-                                                                              
 
 async function scrapeSubtitles(imdbId, season = null, episode = null, lang = "en") {
   const cacheKey = `subs:${imdbId}:${season}:${episode}:${lang}`;
