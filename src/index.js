@@ -919,10 +919,10 @@ async function extractGenericEmbed(embedUrl, referer) {
   } catch { return []; }
 }
 
-async function scrapeFlixHQMovie(imdbId) {
+async function scrapeFlixHQMovie(imdbId, title = null) {
   try {
-    const title = imdbId; 
-    const results = await flixhqSearch(imdbId, "movie");
+    const searchQuery = title || imdbId;
+    const results = await flixhqSearch(searchQuery, "movie");
     if (!results.length) return [];
     const content = results[0];
     const servers = await flixhqGetServers(content.id, false);
@@ -939,9 +939,10 @@ async function scrapeFlixHQMovie(imdbId) {
   }
 }
 
-async function scrapeFlixHQTV(imdbId, season, episode) {
+async function scrapeFlixHQTV(imdbId, season, episode, title = null) {
   try {
-    const results = await flixhqSearch(imdbId, "tv");
+    const searchQuery = title || imdbId;
+    const results = await flixhqSearch(searchQuery, "tv");
     if (!results.length) return [];
     const content = results[0];
     const episodeId = await flixhqGetEpisodeId(content.id, season, episode);
@@ -962,13 +963,13 @@ async function scrapeFlixHQTV(imdbId, season, episode) {
 
                                                                                 
 
-const VIDSRCTO_BASE = "https://vidsrc.to";
+const VIDSRCTO_BASE = "https://vidsrc.xyz";
 
 async function scrapeVidsrcTo(imdbId, season = null, episode = null) {
   try {
     const url = season
-      ? `${VIDSRCTO_BASE}/embed/tv/${imdbId}/${season}/${episode}`
-      : `${VIDSRCTO_BASE}/embed/movie/${imdbId}`;
+      ? `${VIDSRCTO_BASE}/embed/tv?imdb=${imdbId}&season=${season}&episode=${episode}`
+      : `${VIDSRCTO_BASE}/embed/movie?imdb=${imdbId}`;
 
     const html = await hybridGet(url, { referer: VIDSRCTO_BASE });
     const $ = cheerio.load(html);
@@ -1175,7 +1176,7 @@ async function scrape2Embed(imdbId, season = null, episode = null) {
 
                                                                                             
 
-const ZORO_BASE = "https://aniwatch.to";
+const ZORO_BASE = "https://hianime.to";
 
 const ZORO_KEY = "8z+sQGfJ0e7UYU0nJmJeKXXZdHHf0M8KdHHf0M8KBEE=";
 
@@ -1306,7 +1307,7 @@ async function scrapeZoroAnime(anilistId, episodeNum, subType = "sub") {
 
                                                                                 
 
-const GOGO_BASE = "https://gogoanime3.co";
+const GOGO_BASE = "https://anitaku.pe";
 const GOGO_AJAX = "https://ajax.gogocdn.net";
 
 const GOGO_IV   = Buffer.from("3232363936313634", "utf8");   
@@ -1459,9 +1460,15 @@ async function gatherMovieStreams(imdbId, tmdbId) {
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
+  let movieTitle = null;
+  try {
+    const meta = await tmdb(`/movie/${tmdbId}`);
+    movieTitle = meta?.title || meta?.original_title || null;
+  } catch {}
+
   const started = Date.now();
   const results = await Promise.allSettled([
-    scrapeFlixHQMovie(imdbId),
+    scrapeFlixHQMovie(imdbId, movieTitle),
     scrapeVidsrcTo(imdbId),
     scrapeVidsrcMe(imdbId),
     scrapeRive(tmdbId, "movie"),
@@ -1489,9 +1496,15 @@ async function gatherTVStreams(imdbId, tmdbId, season, episode) {
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
+  let showTitle = null;
+  try {
+    const meta = await tmdb(`/tv/${tmdbId}`);
+    showTitle = meta?.name || meta?.original_name || null;
+  } catch {}
+
   const started = Date.now();
   const results = await Promise.allSettled([
-    scrapeFlixHQTV(imdbId, season, episode),
+    scrapeFlixHQTV(imdbId, season, episode, showTitle),
     scrapeVidsrcTo(imdbId, season, episode),
     scrapeVidsrcMe(imdbId, season, episode),
     scrapeRive(tmdbId, "tv", season, episode),
